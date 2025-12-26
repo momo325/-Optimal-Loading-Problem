@@ -1,0 +1,822 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>最优装载问题 - 全算法演示套件</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <style>
+        body {
+            font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif;
+            background-color: #f0f9ff;
+            /* 强制隐藏水平滚动条，防止页面被撑宽 */
+            overflow-x: hidden;
+            overflow-y: auto; 
+            user-select: none;
+            -webkit-tap-highlight-color: transparent;
+        }
+        
+        .container-box {
+            transition: transform 0.4s cubic-bezier(0.25, 1, 0.5, 1), 
+                        opacity 0.3s ease, 
+                        background-color 0.3s ease,
+                        box-shadow 0.3s ease;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            will-change: transform, opacity;
+            z-index: 10;
+        }
+        .container-box.scanning {
+            box-shadow: 0 0 15px 5px rgba(59, 130, 246, 0.6);
+            transform: scale(1.1);
+            z-index: 20;
+        }
+        .container-box.selected-dp {
+            border: 4px solid #10b981;
+            transform: translateY(-5px);
+        }
+        @media (min-width: 768px) {
+            .container-box.selected-dp {
+                border: 4px solid #10b981;
+                transform: translateY(-10px);
+            }
+        }
+        .container-box.best-solution {
+            box-shadow: 0 0 20px rgba(16, 185, 129, 0.6);
+            border: 3px solid #10b981;
+        }
+
+        .ship-hull {
+            clip-path: polygon(0 0, 100% 0, 85% 100%, 15% 100%);
+            transition: transform 0.5s ease;
+        }
+        .water-wave {
+            animation: wave 3s ease-in-out infinite alternate;
+        }
+        @keyframes wave {
+            from { transform: translateY(0); }
+            to { transform: translateY(10px); }
+        }
+
+        .scan-line {
+            position: absolute;
+            top: 0; bottom: 0; left: 0;
+            width: 4px;
+            background: rgba(59, 130, 246, 0.8);
+            box-shadow: 0 0 20px 5px rgba(59, 130, 246, 0.5);
+            opacity: 0;
+            pointer-events: none;
+            z-index: 30;
+        }
+        
+        .active\:scale-95:active {
+            transform: scale(0.95);
+        }
+
+        /* 树形视图样式 */
+        #tree-view-area {
+            overflow-x: auto;
+            overflow-y: hidden;
+            background-color: #ffffff;
+            border-radius: 12px;
+            box-shadow: inset 0 0 20px rgba(0,0,0,0.05);
+            cursor: grab;
+            /* 隐藏滚动条但允许滚动 */
+            scrollbar-width: thin;
+        }
+        #tree-view-area:active {
+            cursor: grabbing;
+        }
+    </style>
+</head>
+<body class="h-screen flex flex-col items-center justify-between p-2 md:p-4 pb-0">
+
+    <!-- 顶部数据面板 -->
+    <div class="w-full max-w-5xl flex flex-col items-center md:flex-row md:items-start md:justify-between z-20 mt-2 space-y-4 md:space-y-0">
+        
+        <!-- 中间：状态显示 (Order 1) -->
+        <div class="order-1 md:order-2 w-full md:flex-1 md:px-8 flex flex-col items-center">
+             <div id="status-bar" class="bg-white/90 backdrop-blur px-4 py-2 md:px-6 md:py-3 rounded-full shadow-lg border border-yellow-200 text-yellow-800 font-bold text-sm md:text-lg mb-2 md:mb-4 transition-all duration-300 transform translate-y-0 opacity-100 text-center w-full max-w-sm">
+                准备就绪：请选择算法并点击开始
+            </div>
+            
+            <!-- 仪表盘 -->
+            <div class="bg-white p-3 md:p-4 rounded-2xl shadow-xl border border-gray-100 flex items-center justify-between md:justify-center md:space-x-8 w-full max-w-sm">
+                <div class="text-center flex-1">
+                    <div class="text-[10px] md:text-xs text-gray-400 font-bold uppercase">船只载重</div>
+                    <div class="text-2xl md:text-3xl font-black text-slate-700" id="capacity-display">80</div>
+                </div>
+                <div class="h-8 md:h-12 w-px bg-gray-100"></div>
+                <div class="text-center flex-1">
+                    <div class="text-[10px] md:text-xs text-gray-400 font-bold uppercase">当前载重</div>
+                    <div class="text-2xl md:text-3xl font-black text-green-600 transition-all duration-300 scale-100" id="current-weight-display">0</div>
+                </div>
+                <div class="h-8 md:h-12 w-px bg-gray-100"></div>
+                <div class="text-center flex-1">
+                    <div class="text-[10px] md:text-xs text-gray-400 font-bold uppercase">装载数量</div>
+                    <div class="text-2xl md:text-3xl font-black text-purple-600" id="count-display">0</div>
+                </div>
+                <div id="best-score-panel" class="hidden pl-2 md:pl-8 border-l border-gray-100 text-center flex-1">
+                    <div class="text-[10px] md:text-xs text-gray-400 font-bold uppercase text-red-500">历史最佳</div>
+                    <div class="text-2xl md:text-3xl font-black text-red-500" id="best-display">0</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 左侧：算法选择器 (Order 2) -->
+        <div class="order-2 md:order-1 bg-white p-2 rounded-xl shadow-lg border border-blue-100 flex flex-col space-y-2 w-full max-w-sm md:w-64">
+            <div class="text-xs font-bold text-gray-400 uppercase tracking-wider px-2 text-center md:text-left">选择算法策略</div>
+            <div class="grid grid-cols-3 gap-2 md:flex md:flex-col md:gap-0 md:space-y-2">
+                <button onclick="switchMode('greedy')" id="tab-greedy" class="algo-tab px-2 py-2 md:px-4 md:py-3 rounded-lg text-center md:text-left font-bold transition flex flex-col md:flex-row items-center md:justify-between bg-blue-50 text-blue-700 ring-2 ring-blue-500 text-xs md:text-base">
+                    <span>贪心算法</span>
+                    <span class="hidden md:inline text-xs bg-blue-200 text-blue-800 px-2 py-0.5 rounded">排序+选择</span>
+                </button>
+                <button onclick="switchMode('backtrack')" id="tab-backtrack" class="algo-tab px-2 py-2 md:px-4 md:py-3 rounded-lg text-center md:text-left font-bold text-gray-600 hover:bg-gray-50 transition flex flex-col md:flex-row items-center md:justify-between text-xs md:text-base">
+                    <span>回溯法</span>
+                    <span class="hidden md:inline text-xs bg-gray-200 text-gray-600 px-2 py-0.5 rounded">深度试错</span>
+                </button>
+                <button onclick="switchMode('dp')" id="tab-dp" class="algo-tab px-2 py-2 md:px-4 md:py-3 rounded-lg text-center md:text-left font-bold text-gray-600 hover:bg-gray-50 transition flex flex-col md:flex-row items-center md:justify-between text-xs md:text-base">
+                    <span>动态规划</span>
+                    <span class="hidden md:inline text-xs bg-gray-200 text-gray-600 px-2 py-0.5 rounded">全局最优</span>
+                </button>
+            </div>
+            
+            <div class="hidden md:block h-px bg-gray-200 my-2"></div>
+
+            <!-- 操作按钮组 -->
+            <div class="grid grid-cols-2 gap-2 mt-2 md:mt-0">
+                <button onclick="initContainers()" class="py-2 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-lg font-bold text-xs md:text-sm transition">
+                    🎲 生成新数据
+                </button>
+                <button onclick="resetAndRun()" id="btn-run" class="col-span-1 py-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white rounded-lg font-bold text-xs md:text-sm shadow-lg shadow-blue-500/30 transition transform active:scale-95">
+                    ▶ 开始演示
+                </button>
+            </div>
+
+            <!-- 视图切换按钮 (仅回溯法显示 + 仅PC端显示) -->
+            <!-- 增加了一个父级 div 带有 hidden md:block，强制手机端隐藏 -->
+            <div class="hidden md:block w-full">
+                <button onclick="toggleView()" id="btn-toggle-view" class="hidden w-full mt-2 py-2 bg-amber-100 hover:bg-amber-200 text-amber-800 rounded-lg font-bold text-xs md:text-sm transition items-center justify-center space-x-1 border border-amber-300">
+                    <span>🌳</span>
+                    <span id="view-toggle-text">切换：解空间树视图</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- 右侧：图例 -->
+        <div class="order-3 hidden md:flex w-48 bg-white/80 backdrop-blur p-4 rounded-xl text-sm space-y-2 shadow-sm border border-gray-100 flex-col">
+            <div class="font-bold text-gray-700 mb-2">图示说明</div>
+            <div class="flex items-center space-x-2"><div class="w-3 h-3 rounded-full bg-green-500"></div><span class="text-gray-600">较轻 (优选)</span></div>
+            <div class="flex items-center space-x-2"><div class="w-3 h-3 rounded-full bg-red-500"></div><span class="text-gray-600">较重 (慎选)</span></div>
+            <div class="flex items-center space-x-2"><div class="w-3 h-3 border-2 border-yellow-400"></div><span class="text-gray-600">正在计算</span></div>
+            <div class="h-px bg-gray-200 my-2 w-full"></div>
+            <div class="flex flex-col items-center justify-center pt-1">
+                <div id="qrcode" class="bg-white p-1 rounded shadow-sm"></div>
+                <div class="text-xs text-gray-500 mt-2 font-bold text-center">手机扫码模拟</div>
+                <div class="text-xs text-gray-500 mt-2 font-bold text-center">或输入sf.zakee.fun</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 主视图区域：包含 装载视图 和 树形视图 -->
+    <div class="w-full max-w-6xl flex-1 relative flex flex-col justify-end mb-4 perspective-1000 mt-4 md:mt-0">
+        
+        <!-- 1. 装载视图 (默认显示) -->
+        <div id="loading-view" class="w-full h-full flex flex-col justify-end transition-opacity duration-300">
+            <!-- 码头区域 -->
+            <div class="w-full h-24 md:h-40 relative flex justify-center items-end mb-2 md:mb-4" id="dock-area">
+                <div id="scan-line" class="scan-line"></div>
+            </div>
+
+            <!-- 船只区域 -->
+            <div class="relative w-full h-48 md:h-64 flex flex-col items-center justify-end z-10 pb-4">
+                <div id="ship-deck" class="w-[90%] md:w-[85%] h-32 md:h-48 flex flex-wrap-reverse content-start justify-center gap-1 mb-[-2px] z-20 relative px-2 md:px-8"></div>
+                
+                <div id="ship-body" class="ship-hull w-full h-28 md:h-36 bg-gradient-to-b from-slate-700 to-slate-900 flex flex-col items-center justify-end relative shadow-2xl z-10 pt-2 md:pt-4 pb-2">
+                    <div class="absolute right-6 md:right-12 top-0 bottom-0 w-1.5 md:w-2 flex flex-col justify-between py-4 opacity-50 pointer-events-none">
+                        <div class="w-full h-0.5 bg-red-500"></div>
+                        <div class="w-full h-0.5 bg-white"></div>
+                        <div class="w-full h-0.5 bg-red-500"></div>
+                    </div>
+                    <div class="z-20 flex flex-col items-center justify-between h-full w-full">
+                        <div class="text-slate-500 font-bold tracking-[0.2em] text-xs md:text-lg opacity-60 select-none uppercase mt-1">powered by zakee</div>
+                        <div class="w-2/3 md:w-1/2 flex flex-col items-center mb-1">
+                             <div class="text-[8px] md:text-[10px] text-gray-500 uppercase tracking-widest mb-1">Load Capacity</div>
+                             <div class="h-2 md:h-3 bg-gray-800 rounded-full overflow-hidden border border-gray-600 shadow-inner w-full">
+                                <div id="progress-bar" class="h-full bg-gradient-to-r from-emerald-400 to-emerald-600 w-0 transition-all duration-300"></div>
+                             </div>
+                        </div>
+                        <a href="https://zakee.fun" target="_blank" class="mb-2 px-3 py-1 bg-blue-500/80 hover:bg-blue-600 text-white text-[10px] rounded-full shadow-lg backdrop-blur-sm transition-all transform hover:scale-105 no-underline flex items-center space-x-1 border border-blue-400/30">
+                            <span>访问博客主站</span>
+                        </a>
+                    </div>
+                </div>
+                <div class="absolute bottom-[-20px] left-[-50%] right-[-50%] h-20 md:h-28 bg-blue-400/30 water-wave z-20 pointer-events-none"></div>
+                <div class="absolute bottom-[-35px] left-[-50%] right-[-50%] h-20 md:h-28 bg-blue-600/20 water-wave z-0" style="animation-delay: -1.5s;"></div>
+            </div>
+        </div>
+
+        <!-- 2. 解空间树视图 (默认隐藏) -->
+        <div id="tree-view-area" class="hidden absolute inset-0 z-50 border-2 border-gray-200">
+            <canvas id="tree-canvas" class="block"></canvas>
+            <div class="absolute top-2 left-2 bg-white/90 p-2 rounded text-xs text-gray-500 shadow pointer-events-none">
+                <div class="flex items-center space-x-1">
+                    <span class="w-2 h-2 rounded-full bg-blue-500"></span><span>搜索中</span>
+                    <span class="w-2 h-2 rounded-full bg-green-500 ml-2"></span><span>最优</span>
+                    <span class="w-2 h-2 rounded-full bg-gray-400 ml-2"></span><span>已探索</span>
+                    <span class="w-2 h-2 rounded-full bg-gray-200 ml-2"></span><span>剪枝</span>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        // === 游戏配置 ===
+        const CONTAINER_COUNT = 7; 
+        const CAPACITY = 80;
+        const TARGET_URL = "https://sf.zakee.fun"; 
+
+        let containers = [];
+        let currentMode = 'greedy';
+        let isRunning = false;
+        let isTreeView = false; 
+        
+        let currentWeight = 0;
+        let loadedCount = 0;
+        let bestCount = 0;
+        let bestSolutionIds = [];
+        let bestPathTreeNodes = []; 
+
+        // 树相关数据 - 紧凑版
+        let treeNodes = {}; 
+        let treeCanvas = null;
+        let treeCtx = null;
+        const TREE_NODE_RADIUS = 10; // 减小半径
+        const TREE_LEVEL_HEIGHT = 50; // 减小层高
+        const TREE_CANVAS_WIDTH = 2000; // 显著减小宽度
+        const TREE_CANVAS_HEIGHT = 500;
+
+        const els = {
+            dock: document.getElementById('dock-area'),
+            deck: document.getElementById('ship-deck'),
+            ship: document.getElementById('ship-body'),
+            weight: document.getElementById('current-weight-display'),
+            capacity: document.getElementById('capacity-display'),
+            count: document.getElementById('count-display'),
+            bestPanel: document.getElementById('best-score-panel'),
+            best: document.getElementById('best-display'),
+            bar: document.getElementById('progress-bar'),
+            status: document.getElementById('status-bar'),
+            btn: document.getElementById('btn-run'),
+            scanLine: document.getElementById('scan-line'),
+            qrContainer: document.getElementById('qrcode'),
+            loadingView: document.getElementById('loading-view'),
+            treeView: document.getElementById('tree-view-area'),
+            treeCanvas: document.getElementById('tree-canvas'),
+            toggleViewBtn: document.getElementById('btn-toggle-view'),
+            toggleViewText: document.getElementById('view-toggle-text')
+        };
+
+        // === 初始化 ===
+        function init() {
+            initContainers();
+            generateQRCode();
+            initTreeCanvas();
+        }
+
+        function initTreeCanvas() {
+            treeCanvas = els.treeCanvas;
+            treeCtx = treeCanvas.getContext('2d');
+            const dpr = window.devicePixelRatio || 1;
+            treeCanvas.width = TREE_CANVAS_WIDTH * dpr;
+            treeCanvas.height = TREE_CANVAS_HEIGHT * dpr;
+            treeCanvas.style.width = TREE_CANVAS_WIDTH + 'px';
+            treeCanvas.style.height = TREE_CANVAS_HEIGHT + 'px';
+            treeCtx.scale(dpr, dpr);
+            
+            // 初始居中滚动
+            els.treeView.scrollLeft = (TREE_CANVAS_WIDTH - els.treeView.clientWidth) / 2;
+        }
+
+        function initContainers() {
+            if (isRunning) return;
+            containers = [];
+            
+            if(els.capacity) els.capacity.innerText = CAPACITY;
+
+            for (let i = 0; i < CONTAINER_COUNT; i++) {
+                const weight = Math.floor(Math.random() * 25) + 8; 
+                const hue = Math.max(0, 130 - (weight * 3.5)); 
+                const color = `hsl(${hue}, 75%, 45%)`;
+                
+                const el = document.createElement('div');
+                const baseClass = 'container-box w-12 h-12 md:w-16 md:h-16 rounded-lg md:rounded-xl flex items-center justify-center text-white font-bold text-sm md:text-xl relative m-1 shadow-lg border border-white/20';
+                el.className = baseClass;
+                el.style.backgroundColor = color;
+                el.innerHTML = `<div class="flex flex-col items-center leading-none"><span>${weight}</span><span class="text-[8px] md:text-[9px] opacity-60 mt-0.5">TON</span></div>`;
+                
+                containers.push({ id: i, weight: weight, el: el, color: color, baseClass: baseClass, isLoaded: false });
+            }
+            
+            shuffleContainers(); 
+            resetTreeData();
+            drawTree(); 
+            setStatus("已生成新数据，请选择算法开始");
+        }
+
+        function shuffleContainers() {
+            containers.sort(() => Math.random() - 0.5);
+            els.dock.innerHTML = '';
+            els.dock.appendChild(els.scanLine);
+            containers.forEach(c => {
+                c.el.className = c.baseClass;
+                c.el.style.order = 'unset'; 
+                c.el.style.opacity = '1';
+                c.el.style.transform = 'scale(1)';
+                c.el.style.backgroundColor = c.color;
+                c.el.style.border = '1px solid rgba(255,255,255,0.2)';
+                c.el.style.position = 'static';
+                c.el.style.margin = '4px';
+                c.isLoaded = false; 
+                els.dock.appendChild(c.el);
+            });
+            resetStats();
+        }
+
+        function resetStats() {
+            currentWeight = 0;
+            loadedCount = 0;
+            bestCount = 0;
+            bestSolutionIds = [];
+            bestPathTreeNodes = [];
+            updateUI();
+            els.ship.style.transform = 'translateY(0)';
+            els.bar.style.width = '0%';
+            els.bar.className = 'h-full bg-gradient-to-r from-emerald-400 to-emerald-600 w-0 transition-all duration-300';
+            els.deck.innerHTML = ''; 
+            els.best.innerText = '0';
+        }
+
+        // === 树形视图逻辑 ===
+        function resetTreeData() {
+            treeNodes = {};
+            const rootX = TREE_CANVAS_WIDTH / 2;
+            const rootY = 30; // 顶部留白减少
+            treeNodes[1] = { x: rootX, y: rootY, status: 'visiting', parent: null };
+        }
+
+        function getOrCreateNode(index) {
+            if (treeNodes[index]) return treeNodes[index];
+            
+            const parentIndex = Math.floor(index / 2);
+            const parent = treeNodes[parentIndex];
+            if (!parent) return null; 
+            
+            const level = Math.floor(Math.log2(index));
+            // 调整：初始间距减小，缩放因子调整为 1.2 以减小宽度爆炸
+            const initialGap = TREE_CANVAS_WIDTH / 3.5; 
+            const gap = initialGap / Math.pow(1.9, level - 1); 
+            
+            const isLeft = index % 2 === 0;
+            const x = parent.x + (isLeft ? -1 : 1) * gap; 
+            const y = parent.y + TREE_LEVEL_HEIGHT;
+            
+            treeNodes[index] = { x: x, y: y, status: 'pending', parent: parentIndex };
+            return treeNodes[index];
+        }
+
+        function updateNodeStatus(index, status) {
+            const node = getOrCreateNode(index);
+            if(node) {
+                node.status = status;
+                drawTree();
+            }
+        }
+
+        function drawTree() {
+            if (!treeCtx) return;
+            treeCtx.clearRect(0, 0, TREE_CANVAS_WIDTH, TREE_CANVAS_HEIGHT);
+            
+            treeCtx.lineWidth = 2;
+            Object.keys(treeNodes).forEach(key => {
+                const node = treeNodes[key];
+                if (node.parent) {
+                    const parent = treeNodes[node.parent];
+                    
+                    let strokeStyle = '#e5e7eb'; 
+                    if (bestPathTreeNodes.includes(parseInt(key)) && bestPathTreeNodes.includes(node.parent)) {
+                         strokeStyle = '#22c55e'; 
+                         treeCtx.lineWidth = 3;
+                    } else if (node.status === 'visiting') {
+                        strokeStyle = '#3b82f6';
+                        treeCtx.lineWidth = 2;
+                    } else if (node.status === 'pruned' || node.status === 'pruned-bound') {
+                        strokeStyle = '#e5e7eb';
+                        treeCtx.lineWidth = 1;
+                    } else {
+                        strokeStyle = '#9ca3af'; 
+                         treeCtx.lineWidth = 1.5;
+                    }
+
+                    treeCtx.beginPath();
+                    treeCtx.moveTo(parent.x, parent.y);
+                    treeCtx.lineTo(node.x, node.y);
+                    treeCtx.strokeStyle = strokeStyle;
+                    treeCtx.stroke();
+                    
+                    if (node.status.startsWith('pruned')) {
+                        const midX = (parent.x + node.x) / 2;
+                        const midY = (parent.y + node.y) / 2;
+                        drawCross(midX, midY);
+                    }
+                }
+            });
+
+            Object.keys(treeNodes).forEach(key => {
+                const node = treeNodes[key];
+                const isBest = bestPathTreeNodes.includes(parseInt(key));
+                
+                treeCtx.beginPath();
+                treeCtx.arc(node.x, node.y, TREE_NODE_RADIUS, 0, 2 * Math.PI);
+                
+                if (isBest) {
+                    treeCtx.fillStyle = '#22c55e'; 
+                    treeCtx.strokeStyle = '#15803d';
+                } else if (node.status === 'visiting') {
+                    treeCtx.fillStyle = '#3b82f6'; 
+                    treeCtx.strokeStyle = '#1d4ed8';
+                } else if (node.status.startsWith('pruned')) {
+                    treeCtx.fillStyle = '#f3f4f6'; 
+                    treeCtx.strokeStyle = '#d1d5db';
+                } else {
+                    treeCtx.fillStyle = '#6b7280'; 
+                    treeCtx.strokeStyle = '#374151';
+                }
+                
+                treeCtx.fill();
+                treeCtx.lineWidth = 1.5;
+                treeCtx.stroke();
+            });
+        }
+
+        function drawCross(x, y) {
+            const size = 4;
+            treeCtx.beginPath();
+            treeCtx.moveTo(x - size, y - size);
+            treeCtx.lineTo(x + size, y + size);
+            treeCtx.moveTo(x + size, y - size);
+            treeCtx.lineTo(x - size, y + size);
+            treeCtx.strokeStyle = '#ef4444';
+            treeCtx.lineWidth = 2;
+            treeCtx.stroke();
+        }
+
+        function toggleView() {
+            isTreeView = !isTreeView;
+            if (isTreeView) {
+                els.loadingView.classList.add('hidden');
+                els.treeView.classList.remove('hidden');
+                els.toggleViewText.innerText = '切换：装载视图';
+                drawTree(); 
+            } else {
+                els.treeView.classList.add('hidden');
+                els.loadingView.classList.remove('hidden');
+                els.toggleViewText.innerText = '切换：解空间树视图';
+            }
+        }
+
+        function switchMode(mode) {
+            if (isRunning) return;
+            currentMode = mode;
+            
+            document.querySelectorAll('.algo-tab').forEach(t => {
+                t.classList.remove('bg-blue-50', 'text-blue-700', 'ring-2', 'ring-blue-500');
+                t.classList.add('text-gray-600', 'hover:bg-gray-50');
+            });
+            const activeTab = document.getElementById(`tab-${mode}`);
+            activeTab.classList.remove('text-gray-600', 'hover:bg-gray-50');
+            activeTab.classList.add('bg-blue-50', 'text-blue-700', 'ring-2', 'ring-blue-500');
+            
+            if (mode === 'backtrack') {
+                els.bestPanel.classList.remove('hidden');
+                els.toggleViewBtn.classList.remove('hidden');
+                els.toggleViewBtn.classList.add('flex');
+                setStatus("回溯法：通过【试错】与【回退】寻找最优解");
+            } else {
+                els.bestPanel.classList.add('hidden');
+                els.toggleViewBtn.classList.add('hidden');
+                els.toggleViewBtn.classList.remove('flex');
+                if (isTreeView) toggleView();
+                
+                if (mode === 'dp') setStatus("动态规划：扫描并计算全局，直接得出最优组合");
+                else setStatus("贪心算法：按重量排序，优先装最轻的");
+            }
+            shuffleContainers(); 
+            resetTreeData();
+            drawTree();
+        }
+
+        async function resetAndRun() {
+            if (isRunning) return;
+            isRunning = true;
+            els.btn.disabled = true;
+            els.btn.classList.add('opacity-50', 'cursor-not-allowed');
+            els.btn.innerText = '演示进行中...';
+            els.toggleViewBtn.disabled = false; 
+            
+            if (els.deck.children.length > 0) {
+                 shuffleContainers();
+                 await sleep(500);
+            }
+            resetStats(); 
+            resetTreeData();
+            drawTree();
+            
+            if (currentMode === 'greedy') await runGreedy();
+            else if (currentMode === 'backtrack') await runBacktrack();
+            else if (currentMode === 'dp') await runDP();
+            
+            isRunning = false;
+            els.btn.disabled = false;
+            els.btn.classList.remove('opacity-50', 'cursor-not-allowed');
+            els.btn.innerText = '▶ 开始演示';
+            setStatus(`${getModeName()}演示结束！`);
+        }
+
+        function generateQRCode() {
+            if (window.innerWidth >= 768) {
+                els.qrContainer.innerHTML = '';
+                new QRCode(els.qrContainer, {
+                    text: TARGET_URL,
+                    width: 120,
+                    height: 120,
+                    colorDark : "#000000",
+                    colorLight : "#ffffff",
+                    correctLevel : QRCode.CorrectLevel.H
+                });
+            }
+        }
+
+        async function runGreedy() {
+            setStatus("步骤 1：按重量从小到大排序");
+            containers.sort((a, b) => a.weight - b.weight);
+            for(let i=0; i<containers.length; i++) {
+                containers[i].el.style.order = i; 
+                containers[i].el.animate([{ transform: 'scale(1.1)', offset: 0.5 }, { transform: 'scale(1)' }], 300);
+                await sleep(100);
+            }
+            await sleep(500);
+
+            setStatus("步骤 2：依次装载 (遇到超重停止)");
+            for (let c of containers) {
+                c.el.style.transform = 'translateY(-15px)';
+                c.el.style.boxShadow = '0 10px 15px -3px rgba(0, 0, 0, 0.2)';
+                await sleep(500);
+
+                if (currentWeight + c.weight <= CAPACITY) {
+                    await moveContainerToDeck(c);
+                    currentWeight += c.weight;
+                    loadedCount++;
+                    updateUI();
+                } else {
+                    c.el.style.backgroundColor = '#ef4444'; 
+                    c.el.animate([
+                        { transform: 'translateY(-15px) rotate(0)' },
+                        { transform: 'translateY(-15px) rotate(-5deg)' },
+                        { transform: 'translateY(-15px) rotate(5deg)' },
+                        { transform: 'translateY(0) rotate(0)' }
+                    ], 400);
+                    setStatus(`重量 ${c.weight} 装不下，算法终止`);
+                    await sleep(1000);
+                    break;
+                }
+            }
+        }
+
+        async function runBacktrack() {
+            setStatus("开始深度优先搜索 (支持切换解空间树视图)");
+            bestSolutionIds = [];
+            bestPathTreeNodes = [];
+            let pathStack = [1]; 
+            await backtrackRecursive(0, 1, pathStack);
+            
+            setStatus(`搜索完成！发现最优解：${bestCount} 个。正在复现最优方案...`);
+            if (isTreeView) toggleView();
+            await sleep(1000);
+            
+            for (let id of bestSolutionIds) {
+                const c = containers.find(x => x.id === id);
+                if (c) {
+                    c.el.classList.add('best-solution');
+                    await moveContainerToDeck(c);
+                    c.el.classList.remove('best-solution');
+                    currentWeight += c.weight;
+                    loadedCount++;
+                    updateUI();
+                    await sleep(200);
+                }
+            }
+            setStatus(`回溯法演示结束。最优装载量：${bestCount}`);
+        }
+
+        async function backtrackRecursive(index, treeIdx, pathStack) {
+            updateNodeStatus(treeIdx, 'visiting');
+            await sleep(300); 
+
+            if (index >= containers.length) {
+                updateNodeStatus(treeIdx, 'explored');
+                if (loadedCount > bestCount) {
+                    bestCount = loadedCount;
+                    els.best.innerText = bestCount;
+                    els.best.parentElement.animate([{ opacity: 0.5 }, { opacity: 1 }], 200);
+                    bestSolutionIds = containers.filter(c => c.isLoaded).map(c => c.id);
+                    bestPathTreeNodes = [...pathStack];
+                    drawTree(); 
+                }
+                return;
+            }
+
+            const c = containers[index];
+            if (loadedCount + (containers.length - index) <= bestCount) {
+                 updateNodeStatus(treeIdx, 'pruned-bound');
+                 c.el.style.opacity = '0.3';
+                 await sleep(200);
+                 c.el.style.opacity = '1';
+                 return;
+            }
+
+            const leftTreeIdx = treeIdx * 2;
+            pathStack.push(leftTreeIdx);
+            c.el.style.border = '3px solid #3b82f6';
+            await sleep(200);
+
+            if (currentWeight + c.weight <= CAPACITY) {
+                await moveContainerToDeck(c, true); 
+                currentWeight += c.weight;
+                loadedCount++;
+                updateUI();
+                await backtrackRecursive(index + 1, leftTreeIdx, pathStack);
+                setStatus("回溯：撤销选择");
+                await moveContainerToDock(c);
+                currentWeight -= c.weight;
+                loadedCount--;
+                updateUI();
+            } else {
+                updateNodeStatus(leftTreeIdx, 'pruned');
+                c.el.style.backgroundColor = '#ef4444';
+                await sleep(300);
+                c.el.style.backgroundColor = c.color;
+            }
+            c.el.style.border = '1px solid rgba(255,255,255,0.2)'; 
+            pathStack.pop();
+
+            const rightTreeIdx = treeIdx * 2 + 1;
+            pathStack.push(rightTreeIdx);
+            c.el.style.opacity = '0.4';
+            await sleep(200);
+            await backtrackRecursive(index + 1, rightTreeIdx, pathStack);
+            c.el.style.opacity = '1';
+            pathStack.pop();
+            updateNodeStatus(treeIdx, 'explored');
+        }
+
+        async function runDP() {
+            setStatus("计算阶段：状态转移方程扫描中...");
+            els.scanLine.style.opacity = '1';
+            els.scanLine.animate([{ left: '0%' }, { left: '100%' }], { duration: 1500, iterations: 2 });
+            for(let c of containers) {
+                c.el.classList.add('scanning');
+                await sleep(150);
+                c.el.classList.remove('scanning');
+            }
+            els.scanLine.style.opacity = '0';
+            
+            const n = containers.length;
+            const dp = Array(CAPACITY + 1).fill(0);
+            const keep = Array(n).fill(null).map(() => Array(CAPACITY + 1).fill(false));
+            
+            for (let i = 0; i < n; i++) {
+                const w = containers[i].weight;
+                for (let j = CAPACITY; j >= w; j--) {
+                    if (dp[j-w] + 1 > dp[j]) {
+                        dp[j] = dp[j-w] + 1;
+                        keep[i][j] = true; 
+                    }
+                }
+            }
+            
+            let k = CAPACITY;
+            const selectedItems = [];
+            for (let i = n - 1; i >= 0; i--) {
+                if (keep[i][k]) {
+                    selectedItems.push(containers[i]);
+                    k -= containers[i].weight;
+                }
+            }
+            
+            setStatus(`计算完成！最优解包含 ${selectedItems.length} 个集装箱`);
+            await sleep(500);
+
+            for (let c of selectedItems) {
+                c.el.classList.add('selected-dp');
+            }
+            await sleep(1000);
+
+            setStatus("执行装载方案");
+            for (let i = selectedItems.length - 1; i >= 0; i--) {
+                const c = selectedItems[i];
+                c.el.classList.remove('selected-dp');
+                if (currentWeight + c.weight <= CAPACITY) {
+                    await moveContainerToDeck(c);
+                    currentWeight += c.weight;
+                    loadedCount++;
+                    updateUI();
+                }
+            }
+        }
+
+        async function moveContainerToDeck(c, fast = false) {
+            c.isLoaded = true; 
+            const rectStart = c.el.getBoundingClientRect();
+            const placeholder = document.createElement('div');
+            placeholder.className = 'w-12 h-12 md:w-16 md:h-16 m-1';
+            c.el.parentNode.insertBefore(placeholder, c.el);
+            c.el.style.position = 'fixed';
+            c.el.style.left = rectStart.left + 'px';
+            c.el.style.top = rectStart.top + 'px';
+            c.el.style.margin = '0';
+            c.el.style.zIndex = 100;
+            document.body.appendChild(c.el);
+            
+            els.deck.appendChild(placeholder.cloneNode());
+            const targets = els.deck.children;
+            const targetEl = targets[targets.length - 1];
+            const rectEnd = targetEl.getBoundingClientRect();
+            targetEl.remove();
+            
+            const duration = fast ? 300 : 600;
+            const animation = c.el.animate([
+                { top: rectStart.top + 'px', left: rectStart.left + 'px', transform: 'scale(1)' },
+                { top: (rectStart.top - 50) + 'px', left: rectStart.left + 'px', transform: 'scale(1.1)', offset: 0.3 },
+                { top: rectEnd.top + 'px', left: rectEnd.left + 'px', transform: 'scale(1)' }
+            ], { duration: duration, easing: 'cubic-bezier(0.25, 1, 0.5, 1)' });
+            
+            await animation.finished;
+            c.el.style.position = 'static';
+            c.el.style.margin = '2px';
+            c.el.style.zIndex = 'auto';
+            els.deck.appendChild(c.el);
+            placeholder.remove();
+        }
+
+        async function moveContainerToDock(c) {
+            c.isLoaded = false; 
+            const rectStart = c.el.getBoundingClientRect();
+            c.el.style.position = 'fixed';
+            c.el.style.left = rectStart.left + 'px';
+            c.el.style.top = rectStart.top + 'px';
+            c.el.style.zIndex = 100;
+            document.body.appendChild(c.el);
+            
+            const rectEnd = els.dock.getBoundingClientRect(); 
+            const animation = c.el.animate([
+                { top: rectStart.top + 'px', left: rectStart.left + 'px' },
+                { top: rectEnd.top + 20 + 'px', left: rectEnd.left + 20 + 'px' } 
+            ], 300);
+            
+            await animation.finished;
+            c.el.style.position = 'static';
+            c.el.style.margin = '4px';
+            c.el.style.zIndex = 'auto';
+            els.dock.appendChild(c.el);
+        }
+
+        function updateUI() {
+            els.weight.innerText = currentWeight;
+            els.count.innerText = loadedCount;
+            const percent = Math.min(100, (currentWeight / CAPACITY) * 100);
+            els.bar.style.width = `${percent}%`;
+            els.ship.style.transform = `translateY(${percent / 4}px)`;
+            if (percent > 90) els.bar.className = 'h-full bg-red-500 transition-all duration-300';
+            else els.bar.className = 'h-full bg-gradient-to-r from-emerald-400 to-emerald-600 w-0 transition-all duration-300';
+        }
+
+        function setStatus(msg) {
+            els.status.innerText = msg;
+            els.status.animate([{ transform: 'scale(1.05)' }, { transform: 'scale(1)' }], 200);
+        }
+
+        function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+        
+        function getModeName() {
+            if(currentMode==='greedy') return '贪心算法';
+            if(currentMode==='backtrack') return '回溯法';
+            return '动态规划';
+        }
+
+        init();
+
+    </script>
+</body>
+</html>
